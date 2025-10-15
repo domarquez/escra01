@@ -21,7 +21,7 @@ def extraer_datos(url):
     texto = response.text
     print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug
     
-    # Encuentra todos los bloques array(5)
+    # Encuentra todos los bloques array(5) con sus posiciones
     array_blocks = re.finditer(r'array\(5\)\s*\{(?:.*?)\}', texto, re.DOTALL | re.IGNORECASE)
     
     if not array_blocks:
@@ -33,8 +33,9 @@ def extraer_datos(url):
     soup = BeautifulSoup(texto, 'html.parser')
     nombre_divs = soup.find_all('div', class_='font-weight-bold bg-oscuro-1')
     
-    for i, block_match in enumerate(array_blocks):
+    for block_match in array_blocks:
         block = block_match.group()
+        block_start = block_match.start()
         # Limpia el bloque
         clean_block = ' '.join(line.strip() for line in block.split('\n') if line.strip())
         print(f"Procesando bloque limpio: {clean_block[:100]}...")  # Debug
@@ -51,23 +52,23 @@ def extraer_datos(url):
             fecha = fecha_match.group(1)
             saldo = int(saldo_match.group(1))
             
-            # Asocia el nombre del div más cercano
-            nombre = f"Estación {un}"
-            if i < len(nombre_divs):
-                nombre = nombre_divs[i].get_text(strip=True)  # Asume orden secuencial
-                if not nombre or str(un) not in texto[texto.index(str(nombre_divs[i])):]:
-                    nombre = f"Estación {un}"  # Fallback si no coincide
+            # Busca el nombre en el div más cercano después del bloque
+            nombre = f"Estación {un}"  # Fallback
+            for div in nombre_divs:
+                div_start = texto.index(str(div))
+                if block_start < div_start and div.get_text(strip=True):
+                    nombre = div.get_text(strip=True)
+                    break
             
             # Busca la ubicación cerca del nombre
-            ubicacion_start = texto.find(str(nombre_divs[i]) if i < len(nombre_divs) else nombre)
+            ubicacion_start = texto.find(str(nombre))
             if ubicacion_start != -1:
                 ubicacion_match = re.search(r'location:\s*([A-Z\s\.,KM\d\-]+?)(?=\s*stock|\.)', texto[ubicacion_start:], re.DOTALL | re.IGNORECASE)
                 ubicacion = ubicacion_match.group(1).strip() if ubicacion_match else "Ubicación no encontrada"
             else:
                 ubicacion = "Ubicación no encontrada"
             
-            # Estima vehículos por estación (busca cerca del bloque)
-            block_start = block_match.start()
+            # Estima vehículos por estación
             vehiculos_match = re.search(r'cantidad de vehiculos.*?(\d+\.?\d*)', texto[block_start:block_start+1000])
             vehiculos = float(vehiculos_match.group(1)) if vehiculos_match else 0
             
