@@ -104,27 +104,33 @@ def guardar_en_neon(datos_lista):
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         
+        # Asegúrate de que un_id sea único (agrega constraint si no existe)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS stocks (
-                id SERIAL PRIMARY KEY,
-                estacion VARCHAR(255),
-                ubicacion TEXT,
-                producto_id INT,
-                stock_litros INT,
-                stock_legible VARCHAR(50),
-                fecha_medicion TIMESTAMP,
-                vehiculos_estimados FLOAT,
-                tiempo_cola_min INT,
-                un_id INT,
-                fecha_extraccion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'unique_un_id'
+                ) THEN
+                    ALTER TABLE stocks ADD CONSTRAINT unique_un_id UNIQUE (un_id);
+                END IF;
+            END $$;
         """)
         
+        # Usa UPSERT para actualizar o insertar
         for datos in datos_lista:
             cur.execute("""
                 INSERT INTO stocks (estacion, ubicacion, producto_id, stock_litros, stock_legible, 
                                    fecha_medicion, vehiculos_estimados, tiempo_cola_min, un_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (un_id) DO UPDATE
+                SET estacion = EXCLUDED.estacion,
+                    ubicacion = EXCLUDED.ubicacion,
+                    producto_id = EXCLUDED.producto_id,
+                    stock_litros = EXCLUDED.stock_litros,
+                    stock_legible = EXCLUDED.stock_legible,
+                    fecha_medicion = EXCLUDED.fecha_medicion,
+                    vehiculos_estimados = EXCLUDED.vehiculos_estimados,
+                    tiempo_cola_min = EXCLUDED.tiempo_cola_min,
+                    fecha_extraccion = CURRENT_TIMESTAMP;
             """, (datos['estacion'], datos['ubicacion'], datos['producto_id'], datos['stock_litros'],
                   datos['stock_legible'], datos['fecha_medicion'], datos['vehiculos_estimados'],
                   datos['tiempo_cola_min'], datos['un_id']))
@@ -132,7 +138,7 @@ def guardar_en_neon(datos_lista):
         conn.commit()
         cur.close()
         conn.close()
-        print(f"Guardados {len(datos_lista)} registros en Neon.")
+        print(f"Guardados/Actualizados {len(datos_lista)} registros en Neon.")
     except Exception as e:
         print(f"Error al guardar: {e}")
 
