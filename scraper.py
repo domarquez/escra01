@@ -18,15 +18,14 @@ def extraer_datos(url):
         return []
     
     texto = response.text
-    print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug: confirma que carga
+    print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug
     
-    # Regex más flexible: Captura arrays con campos clave, ignorando orden exacto y variaciones en string length
-    # Busca 'array(5)' seguido de los 4 campos clave (un, producto_id, fecha, saldo)
-    arrays = re.findall(r'array$$ 5 $$\s*\{\s*$$ .*?"un" $$=>\s*int$$ (\d+) $$\s*$$ .*?"producto_id" $$=>\s*int$$ (\d+) $$\s*$$ .*?"fecha" $$=>\s*string$$ \d+ $$\s*"([^"]+)"\s*$$ .*?"saldo" $$=>\s*string$$ \d+ $$\s*"(\d+)"\s*\}', texto, re.DOTALL | re.IGNORECASE)
+    # Regex ajustado: Captura arrays con saltos de línea y orden flexible
+    arrays = re.findall(r'array$$ 5 $$\s*\{(?:\s*|\n)*$$ .*?"un" $$=>\s*int$$ \s*(\d+)\s* $$(?:\s*|\n)*$$ .*?"producto_id" $$=>\s*int$$ \s*(\d+)\s* $$(?:\s*|\n)*$$ .*?"fecha" $$=>\s*string$$ \d+ $$\s*"([^"]+)"(?:\s*|\n)*$$ .*?"saldo" $$=>\s*string$$ \d+ $$\s*"(\d+)"(?:\s*|\n)*\}', texto, re.DOTALL | re.IGNORECASE)
     
     if not arrays:
         print("No se encontraron arrays. Muestra parcial del texto para debug:")
-        print(texto[texto.find('array'):texto.find('array')+1000] if 'array' in texto else "No hay 'array' en el texto.")  # Debug
+        print(texto[texto.find('array'):texto.find('array')+1000] if 'array' in texto else "No hay 'array' en el texto.")
         return []
     
     datos_lista = []
@@ -113,7 +112,7 @@ def guardar_en_neon(datos_lista):
 if __name__ == "__main__":
     datos = extraer_datos(URL)
     if datos:
-        print("Datos extraídos:", datos)  # Debug completo
+        print("Datos extraídos:", datos)
         guardar_en_neon(datos)
     else:
         print("No se extrajeron datos.")
