@@ -4,6 +4,7 @@ import psycopg2
 import os
 from datetime import datetime
 import re
+import time  # Nueva importación
 
 # URL
 URL = 'http://ec2-3-22-240-207.us-east-2.compute.amazonaws.com/guiasaldos/main/donde/134'
@@ -21,7 +22,7 @@ def extraer_datos(url):
     print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug
     
     # Encuentra todos los bloques array(5)
-    array_blocks = re.findall(r'array$$ 5 $$\s*\{(?:.*?)\}', texto, re.DOTALL | re.IGNORECASE)
+    array_blocks = re.findall(r'array\(5\)\s*\{(?:.*?)\}', texto, re.DOTALL | re.IGNORECASE)
     
     if not array_blocks:
         print("No se encontraron bloques array. Muestra parcial del texto para debug:")
@@ -29,17 +30,17 @@ def extraer_datos(url):
         return []
     
     datos_lista = []
-    soup = BeautifulSoup(texto, 'html.parser')  # Usamos BeautifulSoup para buscar nombres
+    soup = BeautifulSoup(texto, 'html.parser')
     
     for block in array_blocks:
         # Limpia el bloque
         clean_block = ' '.join(line.strip() for line in block.split('\n') if line.strip())
         print(f"Procesando bloque limpio: {clean_block[:100]}...")  # Debug
         
-        un_match = re.search(r'$$ "un" $$=>\s*(?:int$$ \s*(\d+)\s* $$|string$$ \d+ $$\s*"(\d+)")', clean_block, re.DOTALL | re.IGNORECASE)
-        producto_id_match = re.search(r'$$ "producto_id" $$=>\s*int$$ \s*(\d+)\s* $$', clean_block, re.DOTALL | re.IGNORECASE)
-        fecha_match = re.search(r'$$ "fecha" $$=>\s*string$$ \d+ $$\s*"([^"]+)"', clean_block, re.DOTALL | re.IGNORECASE)
-        saldo_match = re.search(r'$$ "saldo" $$=>\s*string$$ \d+ $$\s*"(\d+)"', clean_block, re.DOTALL | re.IGNORECASE)
+        un_match = re.search(r'\["un"\]=>\s*(?:int\(\s*(\d+)\s*\)|string\(\d+\)\s*"(\d+)")', clean_block, re.DOTALL | re.IGNORECASE)
+        producto_id_match = re.search(r'\["producto_id"\]=>\s*int\(\s*(\d+)\s*\)', clean_block, re.DOTALL | re.IGNORECASE)
+        fecha_match = re.search(r'\["fecha"\]=>\s*string\(\d+\)\s*"([^"]+)"', clean_block, re.DOTALL | re.IGNORECASE)
+        saldo_match = re.search(r'\["saldo"\]=>\s*string\(\d+\)\s*"(\d+)"', clean_block, re.DOTALL | re.IGNORECASE)
         
         if un_match and producto_id_match and fecha_match and saldo_match:
             un_int, un_str = un_match.groups()
@@ -48,11 +49,11 @@ def extraer_datos(url):
             fecha = fecha_match.group(1)
             saldo = int(saldo_match.group(1))
             
-            # Busca el nombre en el div siguiente usando BeautifulSoup
+            # Busca el nombre en el div siguiente
             nombre_divs = soup.find_all('div', class_='font-weight-bold bg-oscuro-1')
-            nombre = f"Estación {un}"  # Default si no encuentra
+            nombre = f"Estación {un}"
             for div in nombre_divs:
-                if str(un) in texto[texto.index(str(div)):]:  # Aproxima la asociación por posición
+                if str(un) in texto[texto.index(str(div)):]:
                     nombre = div.get_text(strip=True)
                     break
             
@@ -64,13 +65,9 @@ def extraer_datos(url):
             else:
                 ubicacion = "Ubicación no encontrada"
             
-            # Stock legible
             stock_legible = f"{saldo:,} Lts."
-            
-            # Estimaciones (aproximadas del texto global)
             vehiculos_match = re.search(r'cantidad de vehiculos.*?(\d+\.?\d*)', texto)
             vehiculos = float(vehiculos_match.group(1)) if vehiculos_match else 0
-            
             tiempo_match = re.search(r'avanza cada (\d+) minutos', texto)
             tiempo = int(tiempo_match.group(1)) if tiempo_match else 0
             
@@ -87,7 +84,7 @@ def extraer_datos(url):
             }
             datos_lista.append(datos)
         else:
-            print(f"Match failed in block: {clean_block}")  # Debug detallado
+            print(f"Match failed in block: {clean_block}")
     
     print(f"Extraídos {len(datos_lista)} registros de stock.")
     return datos_lista
@@ -101,7 +98,6 @@ def guardar_en_neon(datos_lista):
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         
-        # Crea tabla si no existe
         cur.execute("""
             CREATE TABLE IF NOT EXISTS stocks (
                 id SERIAL PRIMARY KEY,
@@ -118,7 +114,6 @@ def guardar_en_neon(datos_lista):
             )
         """)
         
-        # Inserta múltiples
         for datos in datos_lista:
             cur.execute("""
                 INSERT INTO stocks (estacion, ubicacion, producto_id, stock_litros, stock_legible, 
@@ -136,9 +131,11 @@ def guardar_en_neon(datos_lista):
         print(f"Error al guardar: {e}")
 
 if __name__ == "__main__":
-    datos = extraer_datos(URL)
-    if datos:
-        print("Datos extraídos:", datos)
-        guardar_en_neon(datos)
-    else:
-        print("No se extrajeron datos.")
+    while True:  # Bucle infinito
+        datos = extraer_datos(URL)
+        if datos:
+            print("Datos extraídos:", datos)
+            guardar_en_neon(datos)
+        else:
+            print("No se extrajeron datos.")
+        time.sleep(1800)  # Pausa de 30 minutos (1800 segundos) entre extracciones
