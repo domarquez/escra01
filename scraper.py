@@ -20,8 +20,8 @@ def extraer_datos(url):
     texto = response.text
     print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug
     
-    # Regex ajustado: Captura arrays con saltos de línea y orden flexible
-    arrays = re.findall(r'array$$ 5 $$\s*\{(?:\s*|\n)*$$ .*?"un" $$=>\s*int$$ \s*(\d+)\s* $$(?:\s*|\n)*$$ .*?"producto_id" $$=>\s*int$$ \s*(\d+)\s* $$(?:\s*|\n)*$$ .*?"fecha" $$=>\s*string$$ \d+ $$\s*"([^"]+)"(?:\s*|\n)*$$ .*?"saldo" $$=>\s*string$$ \d+ $$\s*"(\d+)"(?:\s*|\n)*\}', texto, re.DOTALL | re.IGNORECASE)
+    # Regex ajustado: Acepta int o string para "un", tolera cortes y variaciones
+    arrays = re.findall(r'array$$ 5 $$\s*\{(?:\s*|\n)*$$ .*?"un" $$=>\s*(?:int$$ \s*(\d+)\s* $$|string$$ \d+ $$\s*"(\d+)")(?:\s*|\n)*$$ .*?"producto_id" $$=>\s*int$$ \s*(\d+)\s* $$(?:\s*|\n)*$$ .*?"fecha" $$=>\s*string$$ \d+ $$\s*"([^"]+)"(?:\s*|\n)*$$ .*?"saldo" $$=>\s*string$$ \d+ $$\s*"(\d+)"(?:\s*|\n)*\}', texto, re.DOTALL | re.IGNORECASE)
     
     if not arrays:
         print("No se encontraron arrays. Muestra parcial del texto para debug:")
@@ -30,7 +30,8 @@ def extraer_datos(url):
     
     datos_lista = []
     for match in arrays:
-        un, producto_id, fecha, saldo_str = match
+        un_int, un_str, producto_id, fecha, saldo_str = match
+        un = int(un_int) if un_int else int(un_str)  # Toma int o string como número
         saldo = int(saldo_str)
         
         # Extrae nombre y ubicación (busca cerca del un_id)
@@ -59,7 +60,7 @@ def extraer_datos(url):
             'fecha_medicion': fecha,
             'vehiculos_estimados': vehiculos,
             'tiempo_cola_min': tiempo,
-            'un_id': int(un)
+            'un_id': un
         }
         datos_lista.append(datos)
     
