@@ -4,7 +4,7 @@ import psycopg2
 import os
 from datetime import datetime
 import re
-import time  # Nueva importación
+import time
 
 # URL
 URL = 'http://ec2-3-22-240-207.us-east-2.compute.amazonaws.com/guiasaldos/main/donde/134'
@@ -22,7 +22,7 @@ def extraer_datos(url):
     print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug
     
     # Encuentra todos los bloques array(5)
-    array_blocks = re.findall(r'array\(5\)\s*\{(?:.*?)\}', texto, re.DOTALL | re.IGNORECASE)
+    array_blocks = re.finditer(r'array\(5\)\s*\{(?:.*?)\}', texto, re.DOTALL | re.IGNORECASE)
     
     if not array_blocks:
         print("No se encontraron bloques array. Muestra parcial del texto para debug:")
@@ -31,8 +31,10 @@ def extraer_datos(url):
     
     datos_lista = []
     soup = BeautifulSoup(texto, 'html.parser')
+    nombre_divs = soup.find_all('div', class_='font-weight-bold bg-oscuro-1')
     
-    for block in array_blocks:
+    for i, block_match in enumerate(array_blocks):
+        block = block_match.group()
         # Limpia el bloque
         clean_block = ' '.join(line.strip() for line in block.split('\n') if line.strip())
         print(f"Procesando bloque limpio: {clean_block[:100]}...")  # Debug
@@ -49,27 +51,30 @@ def extraer_datos(url):
             fecha = fecha_match.group(1)
             saldo = int(saldo_match.group(1))
             
-            # Busca el nombre en el div siguiente
-            nombre_divs = soup.find_all('div', class_='font-weight-bold bg-oscuro-1')
+            # Asocia el nombre del div más cercano
             nombre = f"Estación {un}"
-            for div in nombre_divs:
-                if str(un) in texto[texto.index(str(div)):]:
-                    nombre = div.get_text(strip=True)
-                    break
+            if i < len(nombre_divs):
+                nombre = nombre_divs[i].get_text(strip=True)  # Asume orden secuencial
+                if not nombre or str(un) not in texto[texto.index(str(nombre_divs[i])):]:
+                    nombre = f"Estación {un}"  # Fallback si no coincide
             
             # Busca la ubicación cerca del nombre
-            ubicacion_start = texto.find(str(nombre_divs[0]) if nombre_divs else nombre)
+            ubicacion_start = texto.find(str(nombre_divs[i]) if i < len(nombre_divs) else nombre)
             if ubicacion_start != -1:
                 ubicacion_match = re.search(r'location:\s*([A-Z\s\.,KM\d\-]+?)(?=\s*stock|\.)', texto[ubicacion_start:], re.DOTALL | re.IGNORECASE)
                 ubicacion = ubicacion_match.group(1).strip() if ubicacion_match else "Ubicación no encontrada"
             else:
                 ubicacion = "Ubicación no encontrada"
             
-            stock_legible = f"{saldo:,} Lts."
-            vehiculos_match = re.search(r'cantidad de vehiculos.*?(\d+\.?\d*)', texto)
+            # Estima vehículos por estación (busca cerca del bloque)
+            block_start = block_match.start()
+            vehiculos_match = re.search(r'cantidad de vehiculos.*?(\d+\.?\d*)', texto[block_start:block_start+1000])
             vehiculos = float(vehiculos_match.group(1)) if vehiculos_match else 0
-            tiempo_match = re.search(r'avanza cada (\d+) minutos', texto)
+            
+            tiempo_match = re.search(r'avanza cada (\d+) minutos', texto[block_start:block_start+1000])
             tiempo = int(tiempo_match.group(1)) if tiempo_match else 0
+            
+            stock_legible = f"{saldo:,} Lts."
             
             datos = {
                 'estacion': nombre,
@@ -131,11 +136,11 @@ def guardar_en_neon(datos_lista):
         print(f"Error al guardar: {e}")
 
 if __name__ == "__main__":
-    while True:  # Bucle infinito
+    while True:
         datos = extraer_datos(URL)
         if datos:
             print("Datos extraídos:", datos)
             guardar_en_neon(datos)
         else:
             print("No se extrajeron datos.")
-        time.sleep(1800)  # Pausa de 30 minutos (1800 segundos) entre extracciones
+        time.sleep(1800)  # Pausa de 30 minutos
