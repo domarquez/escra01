@@ -20,49 +20,59 @@ def extraer_datos(url):
     texto = response.text
     print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug
     
-    # Regex ajustado: Acepta int o string para "un", tolera cortes y variaciones
-    arrays = re.findall(r'array$$ 5 $$\s*\{(?:\s*|\n)*$$ .*?"un" $$=>\s*(?:int$$ \s*(\d+)\s* $$|string$$ \d+ $$\s*"(\d+)")(?:\s*|\n)*$$ .*?"producto_id" $$=>\s*int$$ \s*(\d+)\s* $$(?:\s*|\n)*$$ .*?"fecha" $$=>\s*string$$ \d+ $$\s*"([^"]+)"(?:\s*|\n)*$$ .*?"saldo" $$=>\s*string$$ \d+ $$\s*"(\d+)"(?:\s*|\n)*\}', texto, re.DOTALL | re.IGNORECASE)
+    # Encuentra todos los bloques array(5)
+    array_blocks = re.findall(r'array\(5\)\s*\{(.*?)\}', texto, re.DOTALL | re.IGNORECASE)
     
-    if not arrays:
-        print("No se encontraron arrays. Muestra parcial del texto para debug:")
+    if not array_blocks:
+        print("No se encontraron bloques array. Muestra parcial del texto para debug:")
         print(texto[texto.find('array'):texto.find('array')+1000] if 'array' in texto else "No hay 'array' en el texto.")
         return []
     
     datos_lista = []
-    for match in arrays:
-        un_int, un_str, producto_id, fecha, saldo_str = match
-        un = int(un_int) if un_int else int(un_str)  # Toma int o string como número
-        saldo = int(saldo_str)
+    for block in array_blocks:
+        un_match = re.search(r'\["un"\]=>\s*(?:int\(\s*(\d+)\s*\)|string\(\d+\)\s*"(\d+)")', block, re.DOTALL | re.IGNORECASE)
+        producto_id_match = re.search(r'\["producto_id"\]=>\s*int\(\s*(\d+)\s*\)', block, re.DOTALL | re.IGNORECASE)
+        fecha_match = re.search(r'\["fecha"\]=>\s*string\(\d+\)\s*"([^"]+)"', block, re.DOTALL | re.IGNORECASE)
+        saldo_match = re.search(r'\["saldo"\]=>\s*string\(\d+\)\s*"(\d+)"', block, re.DOTALL | re.IGNORECASE)
         
-        # Extrae nombre y ubicación (busca cerca del un_id)
-        nombre_match = re.search(rf'un$$ \s*{un}\s* $$.*?([A-Z\s]+?)(?=\s*,\s*location|\.)', texto, re.DOTALL | re.IGNORECASE)
-        nombre = nombre_match.group(1).strip() if nombre_match else f"Estación {un}"
-        
-        ubicacion_match = re.search(rf'un$$ \s*{un}\s* $$.*?location:\s*([A-Z\s\.,KM\d\-]+?)(?=\s*stock|\.)', texto, re.DOTALL | re.IGNORECASE)
-        ubicacion = ubicacion_match.group(1).strip() if ubicacion_match else "Ubicación no encontrada"
-        
-        # Stock legible
-        stock_legible = f"{saldo:,} Lts."
-        
-        # Estimaciones (aproximadas del texto global)
-        vehiculos_match = re.search(r'cantidad de vehiculos.*?(\d+\.?\d*)', texto)
-        vehiculos = float(vehiculos_match.group(1)) if vehiculos_match else 0
-        
-        tiempo_match = re.search(r'avanza cada (\d+) minutos', texto)
-        tiempo = int(tiempo_match.group(1)) if tiempo_match else 0
-        
-        datos = {
-            'estacion': nombre,
-            'ubicacion': ubicacion,
-            'producto_id': int(producto_id),
-            'stock_litros': saldo,
-            'stock_legible': stock_legible,
-            'fecha_medicion': fecha,
-            'vehiculos_estimados': vehiculos,
-            'tiempo_cola_min': tiempo,
-            'un_id': un
-        }
-        datos_lista.append(datos)
+        if un_match and producto_id_match and fecha_match and saldo_match:
+            un_int, un_str = un_match.groups()
+            un = int(un_int) if un_int else int(un_str)
+            producto_id = int(producto_id_match.group(1))
+            fecha = fecha_match.group(1)
+            saldo = int(saldo_match.group(1))
+            
+            # Extrae nombre y ubicación (busca cerca del un_id)
+            nombre_match = re.search(rf'un\(\s*{un}\s*\).*?([A-Z\s]+?)(?=\s*,\s*location|\.)', texto, re.DOTALL | re.IGNORECASE)
+            nombre = nombre_match.group(1).strip() if nombre_match else f"Estación {un}"
+            
+            ubicacion_match = re.search(rf'un\(\s*{un}\s*\).*?location:\s*([A-Z\s\.,KM\d\-]+?)(?=\s*stock|\.)', texto, re.DOTALL | re.IGNORECASE)
+            ubicacion = ubicacion_match.group(1).strip() if ubicacion_match else "Ubicación no encontrada"
+            
+            # Stock legible
+            stock_legible = f"{saldo:,} Lts."
+            
+            # Estimaciones (aproximadas del texto global)
+            vehiculos_match = re.search(r'cantidad de vehiculos.*?(\d+\.?\d*)', texto)
+            vehiculos = float(vehiculos_match.group(1)) if vehiculos_match else 0
+            
+            tiempo_match = re.search(r'avanza cada (\d+) minutos', texto)
+            tiempo = int(tiempo_match.group(1)) if tiempo_match else 0
+            
+            datos = {
+                'estacion': nombre,
+                'ubicacion': ubicacion,
+                'producto_id': producto_id,
+                'stock_litros': saldo,
+                'stock_legible': stock_legible,
+                'fecha_medicion': fecha,
+                'vehiculos_estimados': vehiculos,
+                'tiempo_cola_min': tiempo,
+                'un_id': un
+            }
+            datos_lista.append(datos)
+        else:
+            print("Match failed in block:", block)  # Debug por bloque
     
     print(f"Extraídos {len(datos_lista)} registros de stock.")
     return datos_lista
