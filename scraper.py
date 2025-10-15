@@ -21,7 +21,7 @@ def extraer_datos(url):
     print(f"Longitud del texto HTML: {len(texto)} caracteres")  # Debug
     
     # Encuentra todos los bloques array(5)
-    array_blocks = re.findall(r'array\(5\)\s*\{(.*?)\}', texto, re.DOTALL | re.IGNORECASE)
+    array_blocks = re.findall(r'array$$ 5 $$\s*\{(?:.*?)\}', texto, re.DOTALL | re.IGNORECASE)
     
     if not array_blocks:
         print("No se encontraron bloques array. Muestra parcial del texto para debug:")
@@ -29,11 +29,17 @@ def extraer_datos(url):
         return []
     
     datos_lista = []
+    soup = BeautifulSoup(texto, 'html.parser')  # Usamos BeautifulSoup para buscar nombres
+    
     for block in array_blocks:
-        un_match = re.search(r'\["un"\]=>\s*(?:int\(\s*(\d+)\s*\)|string\(\d+\)\s*"(\d+)")', block, re.DOTALL | re.IGNORECASE)
-        producto_id_match = re.search(r'\["producto_id"\]=>\s*int\(\s*(\d+)\s*\)', block, re.DOTALL | re.IGNORECASE)
-        fecha_match = re.search(r'\["fecha"\]=>\s*string\(\d+\)\s*"([^"]+)"', block, re.DOTALL | re.IGNORECASE)
-        saldo_match = re.search(r'\["saldo"\]=>\s*string\(\d+\)\s*"(\d+)"', block, re.DOTALL | re.IGNORECASE)
+        # Limpia el bloque
+        clean_block = ' '.join(line.strip() for line in block.split('\n') if line.strip())
+        print(f"Procesando bloque limpio: {clean_block[:100]}...")  # Debug
+        
+        un_match = re.search(r'$$ "un" $$=>\s*(?:int$$ \s*(\d+)\s* $$|string$$ \d+ $$\s*"(\d+)")', clean_block, re.DOTALL | re.IGNORECASE)
+        producto_id_match = re.search(r'$$ "producto_id" $$=>\s*int$$ \s*(\d+)\s* $$', clean_block, re.DOTALL | re.IGNORECASE)
+        fecha_match = re.search(r'$$ "fecha" $$=>\s*string$$ \d+ $$\s*"([^"]+)"', clean_block, re.DOTALL | re.IGNORECASE)
+        saldo_match = re.search(r'$$ "saldo" $$=>\s*string$$ \d+ $$\s*"(\d+)"', clean_block, re.DOTALL | re.IGNORECASE)
         
         if un_match and producto_id_match and fecha_match and saldo_match:
             un_int, un_str = un_match.groups()
@@ -42,12 +48,21 @@ def extraer_datos(url):
             fecha = fecha_match.group(1)
             saldo = int(saldo_match.group(1))
             
-            # Extrae nombre y ubicación (busca cerca del un_id)
-            nombre_match = re.search(rf'un\(\s*{un}\s*\).*?([A-Z\s]+?)(?=\s*,\s*location|\.)', texto, re.DOTALL | re.IGNORECASE)
-            nombre = nombre_match.group(1).strip() if nombre_match else f"Estación {un}"
+            # Busca el nombre en el div siguiente usando BeautifulSoup
+            nombre_divs = soup.find_all('div', class_='font-weight-bold bg-oscuro-1')
+            nombre = f"Estación {un}"  # Default si no encuentra
+            for div in nombre_divs:
+                if str(un) in texto[texto.index(str(div)):]:  # Aproxima la asociación por posición
+                    nombre = div.get_text(strip=True)
+                    break
             
-            ubicacion_match = re.search(rf'un\(\s*{un}\s*\).*?location:\s*([A-Z\s\.,KM\d\-]+?)(?=\s*stock|\.)', texto, re.DOTALL | re.IGNORECASE)
-            ubicacion = ubicacion_match.group(1).strip() if ubicacion_match else "Ubicación no encontrada"
+            # Busca la ubicación cerca del nombre
+            ubicacion_start = texto.find(str(nombre_divs[0]) if nombre_divs else nombre)
+            if ubicacion_start != -1:
+                ubicacion_match = re.search(r'location:\s*([A-Z\s\.,KM\d\-]+?)(?=\s*stock|\.)', texto[ubicacion_start:], re.DOTALL | re.IGNORECASE)
+                ubicacion = ubicacion_match.group(1).strip() if ubicacion_match else "Ubicación no encontrada"
+            else:
+                ubicacion = "Ubicación no encontrada"
             
             # Stock legible
             stock_legible = f"{saldo:,} Lts."
@@ -72,7 +87,7 @@ def extraer_datos(url):
             }
             datos_lista.append(datos)
         else:
-            print("Match failed in block:", block)  # Debug por bloque
+            print(f"Match failed in block: {clean_block}")  # Debug detallado
     
     print(f"Extraídos {len(datos_lista)} registros de stock.")
     return datos_lista
