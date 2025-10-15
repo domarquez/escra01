@@ -104,12 +104,19 @@ def guardar_en_neon(datos_lista):
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         
-        # Asegúrate de que un_id sea único (agrega constraint si no existe)
+        # Asegúrate de que un_id sea único, eliminando duplicados si es necesario
         cur.execute("""
             DO $$ BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint WHERE conname = 'unique_un_id'
                 ) THEN
+                    -- Elimina duplicados, quedando el más reciente por un_id
+                    DELETE FROM stocks
+                    WHERE id NOT IN (
+                        SELECT MAX(id)
+                        FROM stocks
+                        GROUP BY un_id
+                    );
                     ALTER TABLE stocks ADD CONSTRAINT unique_un_id UNIQUE (un_id);
                 END IF;
             END $$;
