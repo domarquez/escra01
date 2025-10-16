@@ -44,19 +44,12 @@ def extraer_datos(url):
     # Encuentra todos los bloques array(5) con sus posiciones
     array_blocks = re.finditer(r'array\(5\)\s*\{(?:.*?)\}', texto, re.DOTALL | re.IGNORECASE)
     
-    if not array_blocks:
-        print("No se encontraron bloques array. Muestra parcial del texto para debug:")
-        print(texto[texto.find('array'):texto.find('array')+1000] if 'array' in texto else "No hay 'array' en el texto.")
-        return []
-    
-    datos_lista = []
-    
+    # Diccionario de estaciones extraídas de la página (activas)
+    active_stations = {}
     for block_match in array_blocks:
         block = block_match.group()
         block_start = block_match.start()
-        # Limpia el bloque
         clean_block = ' '.join(line.strip() for line in block.split('\n') if line.strip())
-        print(f"Procesando bloque limpio: {clean_block[:100]}...")  # Debug
         
         un_match = re.search(r'\["un"\]=>\s*(?:int\(\s*(\d+)\s*\)|string\(\d+\)\s*"(\d+)")', clean_block, re.DOTALL | re.IGNORECASE)
         producto_id_match = re.search(r'\["producto_id"\]=>\s*int\(\s*(\d+)\s*\)', clean_block, re.DOTALL | re.IGNORECASE)
@@ -70,39 +63,60 @@ def extraer_datos(url):
             fecha = fecha_match.group(1)
             saldo = int(saldo_match.group(1))
             
-            # Usa el conversor estático para nombre, ubicación y coords
-            station_info = STATION_MAP.get(un, {"name": f"Estación {un}", "location": "Ubicación no encontrada", "coords": (0.0, 0.0)})
-            nombre = station_info["name"]
-            ubicacion = station_info["location"]
-            lat, lon = station_info["coords"]
-            
-            # Estima vehículos por estación
+            # Estima vehículos y tiempo
             vehiculos_match = re.search(r'cantidad de vehiculos.*?(\d+\.?\d*)', texto[block_start:block_start+1000])
             vehiculos = float(vehiculos_match.group(1)) if vehiculos_match else 0
             
             tiempo_match = re.search(r'avanza cada (\d+) minutos', texto[block_start:block_start+1000])
             tiempo = int(tiempo_match.group(1)) if tiempo_match else 0
             
-            stock_legible = f"{saldo:,} Lts."
-            
-            datos = {
-                'estacion': nombre,
-                'ubicacion': ubicacion,
-                'producto_id': producto_id,
+            active_stations[un] = {
                 'stock_litros': saldo,
-                'stock_legible': stock_legible,
                 'fecha_medicion': fecha,
                 'vehiculos_estimados': vehiculos,
                 'tiempo_cola_min': tiempo,
-                'un_id': un,
-                'latitud': lat,
-                'longitud': lon
+                'status': 'disponible'
             }
-            datos_lista.append(datos)
-        else:
-            print(f"Match failed in block: {clean_block}")
     
-    print(f"Extraídos {len(datos_lista)} registros de stock.")
+    # Para todas las estaciones en el mapeo, crea datos: activas con valores reales, inactivas con 0 y "agotado"
+    datos_lista = []
+    for un, info in STATION_MAP.items():
+        station_data = active_stations.get(un, {
+            'stock_litros': 0,
+            'fecha_medicion': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),  # Hora actual si no aparece
+            'vehiculos_estimados': 0,
+            'tiempo_cola_min': 0,
+            'status': 'agotado'
+        })
+        
+        nombre = info["name"]
+        ubicacion = info["location"]
+        lat, lon = info["coords"]
+        stock_litros = station_data['stock_litros']
+        fecha = station_data['fecha_medicion']
+        vehiculos = station_data['vehiculos_estimados']
+        tiempo = station_data['tiempo_cola_min']
+        status = station_data['status']
+        
+        stock_legible = f"{stock_litros:,} Lts."
+        
+        datos = {
+            'estacion': nombre,
+            'ubicacion': ubicacion,
+            'producto_id': 134,  # Fijo para gasolina
+            'stock_litros': stock_litros,
+            'stock_legible': stock_legible,
+            'fecha_medicion': fecha,
+            'vehiculos_estimados': vehiculos,
+            'tiempo_cola_min': tiempo,
+            'un_id': un,
+            'latitud': lat,
+            'longitud': lon,
+            'status': status
+        }
+        datos_lista.append(datos)
+    
+    print(f"Extraídos {len(datos_lista)} registros (incluyendo agotados). Activas: {len(active_stations)}")
     return datos_lista
 
 def guardar_en_neon(datos_lista):
@@ -114,26 +128,29 @@ def guardar_en_neon(datos_lista):
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         
-        # Asegúrate de que un_id sea único, eliminando duplicados si es necesario
+        # Agrega columna status si no existe
         cur.execute("""
             DO $$ BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 FROM pg_constraint WHERE conname = 'unique_un_id'
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name='stocks' AND column_name='status'
                 ) THEN
-                    -- Elimina duplicados, quedando el más reciente por un_id
-                    DELETE FROM stocks
-                    WHERE id NOT IN (
-                        SELECT MAX(id)
-                        FROM stocks
-                        GROUP BY un_id
-                    );
-                    ALTER TABLE stocks ALTER COLUMN id RESTART WITH 1;
-                    ALTER TABLE stocks ADD CONSTRAINT unique_un_id UNIQUE (un_id);
+                    ALTER TABLE stocks ADD COLUMN status VARCHAR(20) DEFAULT 'disponible';
                 END IF;
             END $$;
         """)
         
-        # Agrega columnas latitud y longitud si no existen
+        # Asegúrate de que un_id sea único (limpia duplicados si es necesario)
+        cur.execute("""
+            DELETE FROM stocks
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM stocks
+                GROUP BY un_id
+            );
+        """)
+        
+        # Agrega columnas latitud/longitud si no existen
         cur.execute("""
             DO $$ BEGIN
                 IF NOT EXISTS (
@@ -151,12 +168,23 @@ def guardar_en_neon(datos_lista):
             END $$;
         """)
         
-        # Usa UPSERT para actualizar o insertar
+        # Agrega constraint único si no existe
+        cur.execute("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'unique_un_id'
+                ) THEN
+                    ALTER TABLE stocks ADD CONSTRAINT unique_un_id UNIQUE (un_id);
+                END IF;
+            END $$;
+        """)
+        
+        # UPSERT para cada registro
         for datos in datos_lista:
             cur.execute("""
                 INSERT INTO stocks (estacion, ubicacion, producto_id, stock_litros, stock_legible, 
-                                   fecha_medicion, vehiculos_estimados, tiempo_cola_min, un_id, latitud, longitud)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   fecha_medicion, vehiculos_estimados, tiempo_cola_min, un_id, latitud, longitud, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (un_id) DO UPDATE
                 SET estacion = EXCLUDED.estacion,
                     ubicacion = EXCLUDED.ubicacion,
@@ -168,15 +196,16 @@ def guardar_en_neon(datos_lista):
                     tiempo_cola_min = EXCLUDED.tiempo_cola_min,
                     latitud = EXCLUDED.latitud,
                     longitud = EXCLUDED.longitud,
+                    status = EXCLUDED.status,
                     fecha_extraccion = CURRENT_TIMESTAMP;
             """, (datos['estacion'], datos['ubicacion'], datos['producto_id'], datos['stock_litros'],
                   datos['stock_legible'], datos['fecha_medicion'], datos['vehiculos_estimados'],
-                  datos['tiempo_cola_min'], datos['un_id'], datos['latitud'], datos['longitud']))
+                  datos['tiempo_cola_min'], datos['un_id'], datos['latitud'], datos['longitud'], datos['status']))
         
         conn.commit()
         cur.close()
         conn.close()
-        print(f"Guardados/Actualizados {len(datos_lista)} registros en Neon.")
+        print(f"Guardados/Actualizados {len(datos_lista)} registros en Neon (incluyendo agotados).")
     except Exception as e:
         print(f"Error al guardar: {e}")
 
